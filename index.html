@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vaho. La ventana</title>
+
+  <!-- Cormorant Garamond para los textos de las mujeres, Caveat para lo que se escribe con el dedo -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500;1,600&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.jsdelivr.net/npm/p5@2/lib/p5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ml5@1/dist/ml5.js"></script>
+
+  <style>
+    html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+    canvas { display: block; }
+    #inicio {
+      position: fixed; inset: 0; z-index: 10;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #000; color: #cfd6dc; cursor: pointer;
+      font-family: "Cormorant Garamond", Georgia, serif; text-align: center;
+    }
+    #inicio h1 { font-weight: 300; font-size: clamp(48px, 9vw, 120px); margin: 0; letter-spacing: 0.02em; }
+    #inicio p { font-size: 20px; margin: 0.4em 0 0; opacity: 0.7; }
+    #inicio small { position: absolute; bottom: 28px; font-size: 15px; opacity: 0.45; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div id="inicio">
+    <h1>vaho</h1>
+    <p>clic para empezar</p>
+    <small>
+      d: calibración &nbsp;&nbsp; f: pantalla completa &nbsp;&nbsp; m: mostrar u ocultar travesaños<br>
+      b (mantener): simular aliento &nbsp;&nbsp; r: volver a empañar todo &nbsp;&nbsp; arrastrar el mouse: limpiar
+    </small>
+  </div>
+  <script src="sketch.js"></script>
+</body>
+</html>
