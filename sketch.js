@@ -1,24 +1,17 @@
-// noprotect
-// =====================================================================
-//  VAHO · Pantalla A: la ventana
+//  Ensayo de comparecencia · Pantalla A: la ventana
 //  Ventana de vidrio repartido, nueve paños, una vela al fondo.
 //  p5.js 2.x + ml5.js 1.x (handPose) + Web Audio (aliento)
-// =====================================================================
 
-
-// ---------------------------------------------------------------------
-//  AJUSTES
-//  Casi todo lo poético de la obra se decide acá.
-// ---------------------------------------------------------------------
 const CONFIG = {
   // Cámara
   nombreCamara: 'Facecam',  // se elige la cámara cuyo nombre contenga esta palabra (vacío = la predeterminada)
   anchoCamara: 960,         // 960 x 540 es una resolución propia de la Elgato Facecam MK.2
   altoCamara: 540,
+  fpsCamara: 30,            // imágenes por segundo que se le piden a la cámara (30 o 60)
 
   // Rendimiento
   fps: 30,                  // 30 alcanza para proyección y alivia mucho la máquina
-  intervaloManos: 70,       // ms entre detecciones de manos (70 = unas 14 por segundo)
+  intervaloManos: 10,       // ms de pausa entre una detección de manos y la siguiente (más alto = más liviano, más retraso)
   modeloManos: 'lite',      // 'lite' es más rápido, 'full' más preciso
   resolucionHabitacion: 0.5, // la habitación iluminada se prepara a media resolución
 
@@ -64,7 +57,8 @@ const CONFIG = {
   tamanoManoMouse: 62,      // tamaño de la mano de prueba que sigue al mouse
   grosorDedos: 0.34,        // grosor de los dedos respecto del ancho de la palma
   bordeHuella: 0.6,         // suavidad del borde de la huella (0 = borde duro)
-  suavizadoMano: 0.45,      // 0 a 1, más alto = sigue más rápido a la mano
+  suavizadoMano: 0.6,       // 0 a 1, más alto = sigue más rápido a la mano (y tiembla un poco más)
+  anticipacion: 60,         // ms que la huella se adelanta al último movimiento detectado (0 = sin anticipar)
   // Qué parte de la imagen de la cámara se usa para cubrir toda la ventana.
   zonaCamara: { x0: 0.2, x1: 0.8, y0: 0.08, y1: 0.85 },
 
@@ -194,6 +188,9 @@ let W, H, marco;
 let vidrios = [];
 let vaho, vahoVisible, texturaVaho, texturaPared;
 let video, handPose, manos = [];
+// Para medir la detección y anticipar el movimiento
+let manosAnteriores = [], tiempoManos = 0, tiempoManosAnteriores = 0;
+let msDeteccion = 0, deteccionesPorSegundo = 0, contadorDetecciones = 0, inicioConteo = 0;
 let chico, chicoCtx, chicoPrevio, movimiento = 0;
 let reflejo, reflejoCtx;
 let habitacionBase, spritePincel;
@@ -264,36 +261,75 @@ async function cargarFuentes() {
   }
 }
 
-// Busca la cámara por su nombre (por ejemplo, la Elgato) para no depender
-// de cuál elige el navegador cuando hay más de una conectada
-async function iniciarCamara() {
-  let restricciones = {
-    video: { width: { ideal: CONFIG.anchoCamara }, height: { ideal: CONFIG.altoCamara }, frameRate: { ideal: 30 } },
-    audio: false,
-  };
-  try {
-    if (CONFIG.nombreCamara) {
-      // Los nombres de las cámaras solo son visibles después de dar permiso
-      const permiso = await navigator.mediaDevices.getUserMedia({ video: true });
-      permiso.getTracks().forEach(t => t.stop());
-      const dispositivos = await navigator.mediaDevices.enumerateDevices();
-      const camaras = dispositivos.filter(d => d.kind === 'videoinput');
-      const buscada = CONFIG.nombreCamara.toLowerCase();
-      const elegida = camaras.find(c => c.label.toLowerCase().includes(buscada));
-      if (elegida) {
-        restricciones.video.deviceId = { exact: elegida.deviceId };
-        nombreCamaraEnUso = elegida.label;
-      } else {
-        nombreCamaraEnUso = `no encontré "${CONFIG.nombreCamara}", uso la predeterminada`;
-        console.warn(nombreCamaraEnUso, camaras.map(c => c.label));
-      }
+// Abre la cámara directamente, sin pasar por p5, para poder elegir cuál.
+// Busca la que tenga en su nombre la palabra de CONFIG.nombreCamara
+// (por ejemplo, la Elgato) y así no depende de la que prefiera el navegador.
+let camarasEncontradas = [];
+let fpsRealCamara = 0, ajustesCamara = null;
+
+// Cuenta cuántas imágenes nuevas entrega de verdad la cámara por segundo
+function medirImagenesDeCamara(elemento) {
+  let cuenta = 0, desde = performance.now();
+  const alRecibir = () => {
+    cuenta++;
+    const ahora = performance.now();
+    if (ahora - desde >= 1000) {
+      fpsRealCamara = cuenta * 1000 / (ahora - desde);
+      cuenta = 0;
+      desde = ahora;
     }
+    elemento.requestVideoFrameCallback(alRecibir);
+  };
+  if (elemento.requestVideoFrameCallback) elemento.requestVideoFrameCallback(alRecibir);
+}
+
+async function iniciarCamara() {
+  const pedido = {
+    width: { ideal: CONFIG.anchoCamara },
+    height: { ideal: CONFIG.altoCamara },
+    frameRate: { ideal: CONFIG.fpsCamara },
+  };
+  let flujo = null;
+  try {
+    // Primer permiso: sin él, el navegador no muestra los nombres de las cámaras
+    const permiso = await navigator.mediaDevices.getUserMedia({ video: true });
+    permiso.getTracks().forEach(t => t.stop());
+    const dispositivos = await navigator.mediaDevices.enumerateDevices();
+    const camaras = dispositivos.filter(d => d.kind === 'videoinput');
+    camarasEncontradas = camaras.map(c => c.label || 'sin nombre');
+    const buscada = (CONFIG.nombreCamara || '').toLowerCase();
+    const elegida = buscada ? camaras.find(c => c.label.toLowerCase().includes(buscada)) : null;
+    if (elegida) {
+      flujo = await navigator.mediaDevices.getUserMedia({ video: { ...pedido, deviceId: { exact: elegida.deviceId } }, audio: false });
+    } else {
+      if (buscada) console.warn(`No encontré "${CONFIG.nombreCamara}". Cámaras disponibles:`, camarasEncontradas);
+      flujo = await navigator.mediaDevices.getUserMedia({ video: pedido, audio: false });
+    }
+    const pista = flujo.getVideoTracks()[0];
+    nombreCamaraEnUso = pista ? pista.label : 'sin cámara';
   } catch (e) {
-    console.warn('No se pudo elegir la cámara por nombre.', e);
+    console.warn('No se pudo abrir la cámara.', e);
+    nombreCamaraEnUso = 'sin cámara (' + e.name + ')';
   }
 
-  video = createCapture(restricciones);
-  video.hide();
+  // Elemento de video propio, oculto
+  const elemento = document.createElement('video');
+  elemento.muted = true;
+  elemento.playsInline = true;
+  elemento.autoplay = true;
+  elemento.style.display = 'none';
+  document.body.appendChild(elemento);
+  if (flujo) {
+    elemento.srcObject = flujo;
+    elemento.play().catch(() => {});
+  }
+  video = { elt: elemento };
+  if (flujo) {
+    const pista = flujo.getVideoTracks()[0];
+    ajustesCamara = pista && pista.getSettings ? pista.getSettings() : null;
+    medirImagenesDeCamara(elemento);
+  }
+
   // Lienzos chicos fuera de p5: leerlos es rápido
   chico = document.createElement('canvas');
   chico.width = 64;
@@ -341,11 +377,45 @@ function hayWebGL() {
 // Detecta manos a un ritmo fijo y deja libre el resto del tiempo para dibujar
 async function detectarManosEnBucle() {
   try {
-    if (videoListo()) manos = await handPose.detect(video);
+    if (videoListo()) {
+      const t0 = performance.now();
+      const resultado = await handPose.detect(video.elt);
+      const t1 = performance.now();
+      manosAnteriores = manos;
+      tiempoManosAnteriores = tiempoManos;
+      manos = resultado;
+      tiempoManos = t1;
+      // Medición: cuánto tarda cada detección y cuántas hay por segundo
+      msDeteccion = lerp(msDeteccion || (t1 - t0), t1 - t0, 0.1);
+      contadorDetecciones++;
+      if (t1 - inicioConteo > 1000) {
+        deteccionesPorSegundo = contadorDetecciones * 1000 / (t1 - inicioConteo);
+        contadorDetecciones = 0;
+        inicioConteo = t1;
+      }
+    }
   } catch (e) {
     manos = [];
   }
   setTimeout(detectarManosEnBucle, CONFIG.intervaloManos);
+}
+
+// Estima dónde está la mano ahora, a partir de cómo venía moviéndose
+// entre las dos últimas detecciones. Compensa parte del retraso.
+function anticipar(puntos) {
+  if (!CONFIG.anticipacion || !manosAnteriores.length) return puntos;
+  const lapso = tiempoManos - tiempoManosAnteriores;
+  if (lapso <= 0 || lapso > 400) return puntos;
+  let anterior = null, menor = 80;
+  for (const m of manosAnteriores) {
+    const k = m.keypoints;
+    if (!k || k.length < 21) continue;
+    const d = Math.hypot(k[0].x - puntos[0].x, k[0].y - puntos[0].y);
+    if (d < menor) { menor = d; anterior = k; }
+  }
+  if (!anterior) return puntos;
+  const factor = min(1, CONFIG.anticipacion / lapso);
+  return puntos.map((q, i) => ({ x: q.x + (q.x - anterior[i].x) * factor, y: q.y + (q.y - anterior[i].y) * factor }));
 }
 
 async function iniciarMicrofono() {
@@ -1324,7 +1394,7 @@ function obtenerManos() {
     for (const mano of manos) {
       const k = mano.keypoints;
       if (!k || k.length < 21) continue;
-      crudas.push(escalarMano(k.map(q => videoAPantalla(q.x, q.y))));
+      crudas.push(escalarMano(anticipar(k).map(q => videoAPantalla(q.x, q.y))));
     }
   }
   if (mouseIsPressed && !ratonEnPanel()) {
@@ -1499,7 +1569,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
     push();
     translate(W - 20, y0);
     scale(-1, 1);
-    image(video, 0, 0, pw, ph);
+    drawingContext.drawImage(video.elt, 0, 0, pw, ph);
     pop();
     const z = CONFIG.zonaCamara;
     noFill();
@@ -1534,13 +1604,15 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   fill(255, 200, 0);
 
   fill(0, 190);
-  rect(10, 10, 520, 207);
+  rect(10, 10, 620, 245);
   fill(255);
   textSize(13);
   const lineas = [
     `fps ${frameRate().toFixed(0)}`,
     `cámara ${nombreCamaraEnUso} (${videoListo() ? video.elt.videoWidth + 'x' + video.elt.videoHeight : 'sin imagen'})`,
-    `manos detectadas ${manos.length}`,
+    `imágenes de la cámara: ${fpsRealCamara.toFixed(1)} por segundo (pedidas ${CONFIG.fpsCamara})`,
+    `cámaras conectadas: ${camarasEncontradas.join(' | ') || 'ninguna'}`,
+    `manos detectadas ${manos.length}  |  detección ${msDeteccion.toFixed(0)} ms, ${deteccionesPorSegundo.toFixed(1)} por segundo`,
     `movimiento ${movimiento.toFixed(1)} (umbral ${CONFIG.umbralMovimiento})`,
     `presencia ${hayPresencia ? 'sí' : 'no'}`,
     `escritura desde adentro ${fantasma ? (fantasma.v.sosten < 1 ? 'escribiendo' : 'detenida') : 'en espera'}`,
@@ -1550,7 +1622,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   ];
   lineas.forEach((l, k) => text(l, 20, 32 + k * 19));
 
-  const bx = 20, by = 199, bw = 310;
+  const bx = 20, by = 237, bw = 310;
   fill(60);
   rect(bx, by, bw, 8);
   fill(nivelCrudo > CONFIG.umbralAliento ? color(80, 220, 255) : color(160));
@@ -1594,6 +1666,7 @@ const AJUSTES = [
     { ruta: 'grosorDedos', nombre: 'grosor de los dedos', min: 0.15, max: 0.7, paso: 0.01 },
     { ruta: 'bordeHuella', nombre: 'borde difuso', min: 0, max: 2, paso: 0.05 },
     { ruta: 'suavizadoMano', nombre: 'rapidez de seguimiento', min: 0.05, max: 1, paso: 0.05 },
+    { ruta: 'anticipacion', nombre: 'anticipación del movimiento (ms)', min: 0, max: 200, paso: 5 },
     { ruta: 'tamanoManoMouse', nombre: 'tamaño de la mano del mouse', min: 20, max: 160, paso: 1 },
   ]},
   { grupo: 'Cámara', items: [
@@ -1604,7 +1677,7 @@ const AJUSTES = [
     { ruta: 'opacidadReflejo', nombre: 'reflejo de quien mira', min: 0, max: 0.6, paso: 0.01 },
     { ruta: 'umbralMovimiento', nombre: 'umbral de movimiento', min: 1, max: 60, paso: 0.5 },
     { ruta: 'memoriaPresencia', nombre: 'memoria de presencia (s)', min: 0.5, max: 15, paso: 0.5 },
-    { ruta: 'intervaloManos', nombre: 'ms entre detecciones de manos', min: 30, max: 400, paso: 10 },
+    { ruta: 'intervaloManos', nombre: 'pausa entre detecciones (ms)', min: 0, max: 300, paso: 5 },
   ]},
   { grupo: 'Aliento', items: [
     { ruta: 'umbralAliento', nombre: 'umbral del micrófono', min: 0.002, max: 0.2, paso: 0.001 },
