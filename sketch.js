@@ -11,6 +11,11 @@
 //  Casi todo lo poético de la obra se decide acá.
 // ---------------------------------------------------------------------
 const CONFIG = {
+  // Cámara
+  nombreCamara: 'Facecam',  // se elige la cámara cuyo nombre contenga esta palabra (vacío = la predeterminada)
+  anchoCamara: 960,         // 960 x 540 es una resolución propia de la Elgato Facecam MK.2
+  altoCamara: 540,
+
   // Rendimiento
   fps: 30,                  // 30 alcanza para proyección y alivia mucho la máquina
   intervaloManos: 70,       // ms entre detecciones de manos (70 = unas 14 por segundo)
@@ -200,6 +205,7 @@ let gotas = [];
 let mapaDesgaste, columnasDesgaste;
 const CELDA = 50;
 let depurar = false;
+let nombreCamaraEnUso = 'predeterminada';
 let avisoGrafico = '';
 let llama = { x: 0, y: 0, brillo: 1 };
 
@@ -227,7 +233,7 @@ async function setup() {
   await cargarFuentes();
   construirVentana();
   crearPanel();
-  iniciarCamara();
+  await iniciarCamara();
   await iniciarManos();
 
   document.getElementById('inicio').addEventListener('click', iniciarConClic);
@@ -258,18 +264,44 @@ async function cargarFuentes() {
   }
 }
 
-function iniciarCamara() {
-  video = createCapture(VIDEO);
-  video.size(640, 480);
+// Busca la cámara por su nombre (por ejemplo, la Elgato) para no depender
+// de cuál elige el navegador cuando hay más de una conectada
+async function iniciarCamara() {
+  let restricciones = {
+    video: { width: { ideal: CONFIG.anchoCamara }, height: { ideal: CONFIG.altoCamara }, frameRate: { ideal: 30 } },
+    audio: false,
+  };
+  try {
+    if (CONFIG.nombreCamara) {
+      // Los nombres de las cámaras solo son visibles después de dar permiso
+      const permiso = await navigator.mediaDevices.getUserMedia({ video: true });
+      permiso.getTracks().forEach(t => t.stop());
+      const dispositivos = await navigator.mediaDevices.enumerateDevices();
+      const camaras = dispositivos.filter(d => d.kind === 'videoinput');
+      const buscada = CONFIG.nombreCamara.toLowerCase();
+      const elegida = camaras.find(c => c.label.toLowerCase().includes(buscada));
+      if (elegida) {
+        restricciones.video.deviceId = { exact: elegida.deviceId };
+        nombreCamaraEnUso = elegida.label;
+      } else {
+        nombreCamaraEnUso = `no encontré "${CONFIG.nombreCamara}", uso la predeterminada`;
+        console.warn(nombreCamaraEnUso, camaras.map(c => c.label));
+      }
+    }
+  } catch (e) {
+    console.warn('No se pudo elegir la cámara por nombre.', e);
+  }
+
+  video = createCapture(restricciones);
   video.hide();
   // Lienzos chicos fuera de p5: leerlos es rápido
   chico = document.createElement('canvas');
   chico.width = 64;
-  chico.height = 48;
+  chico.height = 36;
   chicoCtx = chico.getContext('2d', { willReadFrequently: true });
   reflejo = document.createElement('canvas');
-  reflejo.width = 160;
-  reflejo.height = 120;
+  reflejo.width = 192;
+  reflejo.height = 108;
   reflejoCtx = reflejo.getContext('2d');
 }
 
@@ -1463,7 +1495,7 @@ function dibujarMarco() {
 // ---------------------------------------------------------------------
 function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   if (videoListo()) {
-    const pw = 240, ph = 180, x0 = W - 20 - pw, y0 = 20;
+    const pw = 240, ph = round(240 * video.elt.videoHeight / video.elt.videoWidth), x0 = W - 20 - pw, y0 = 20;
     push();
     translate(W - 20, y0);
     scale(-1, 1);
@@ -1502,11 +1534,12 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   fill(255, 200, 0);
 
   fill(0, 190);
-  rect(10, 10, 520, 188);
+  rect(10, 10, 520, 207);
   fill(255);
   textSize(13);
   const lineas = [
     `fps ${frameRate().toFixed(0)}`,
+    `cámara ${nombreCamaraEnUso} (${videoListo() ? video.elt.videoWidth + 'x' + video.elt.videoHeight : 'sin imagen'})`,
     `manos detectadas ${manos.length}`,
     `movimiento ${movimiento.toFixed(1)} (umbral ${CONFIG.umbralMovimiento})`,
     `presencia ${hayPresencia ? 'sí' : 'no'}`,
@@ -1517,7 +1550,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   ];
   lineas.forEach((l, k) => text(l, 20, 32 + k * 19));
 
-  const bx = 20, by = 180, bw = 310;
+  const bx = 20, by = 199, bw = 310;
   fill(60);
   rect(bx, by, bw, 8);
   fill(nivelCrudo > CONFIG.umbralAliento ? color(80, 220, 255) : color(160));
