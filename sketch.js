@@ -1,7 +1,15 @@
-//  Ensayo de comparecencia · Pantalla A: la ventana
+// noprotect
+// =====================================================================
+//  VAHO · Pantalla A: la ventana
 //  Ventana de vidrio repartido, nueve paños, una vela al fondo.
 //  p5.js 2.x + ml5.js 1.x (handPose) + Web Audio (aliento)
+// =====================================================================
 
+
+// ---------------------------------------------------------------------
+//  AJUSTES
+//  Casi todo lo poético de la obra se decide acá.
+// ---------------------------------------------------------------------
 const CONFIG = {
   // Cámara
   nombreCamara: 'Facecam',  // se elige la cámara cuyo nombre contenga esta palabra (vacío = la predeterminada)
@@ -202,6 +210,10 @@ let gotas = [];
 let mapaDesgaste, columnasDesgaste;
 const CELDA = 50;
 let depurar = false;
+// Vigilancia: la obra se recupera sola si algo se cae
+let ultimoError = '', erroresDeDibujo = 0;
+let generacionManos = 0, ultimaDeteccion = 0, reiniciandoManos = false, reiniciosManos = 0;
+let reiniciosCamara = 0, esperaTamano = null, reabriendoCamara = false;
 let nombreCamaraEnUso = 'predeterminada';
 let avisoGrafico = '';
 let llama = { x: 0, y: 0, brillo: 1 };
@@ -235,6 +247,9 @@ async function setup() {
 
   document.getElementById('inicio').addEventListener('click', iniciarConClic);
 }
+
+// Al hacer clic en la obra, el teclado vuelve a ella (y no al editor de código)
+window.addEventListener('pointerdown', () => { try { window.focus(); } catch (e) {} });
 
 async function iniciarConClic() {
   document.getElementById('inicio').style.display = 'none';
@@ -283,6 +298,21 @@ function medirImagenesDeCamara(elemento) {
   if (elemento.requestVideoFrameCallback) elemento.requestVideoFrameCallback(alRecibir);
 }
 
+async function reabrirCamara() {
+  if (reabriendoCamara) return;
+  reabriendoCamara = true;
+  reiniciosCamara++;
+  console.warn('La cámara se detuvo. Reabriéndola.');
+  if (video && video.elt) {
+    const viejo = video.elt.srcObject;
+    if (viejo) viejo.getTracks().forEach(t => t.stop());
+    video.elt.remove();
+  }
+  await new Promise(r => setTimeout(r, 800));
+  await iniciarCamara();
+  reabriendoCamara = false;
+}
+
 async function iniciarCamara() {
   const pedido = {
     width: { ideal: CONFIG.anchoCamara },
@@ -307,6 +337,8 @@ async function iniciarCamara() {
     }
     const pista = flujo.getVideoTracks()[0];
     nombreCamaraEnUso = pista ? pista.label : 'sin cámara';
+    // Si la cámara se desconecta o el sistema la suelta, se vuelve a abrir
+    if (pista) pista.addEventListener('ended', reabrirCamara);
   } catch (e) {
     console.warn('No se pudo abrir la cámara.', e);
     nombreCamaraEnUso = 'sin cámara (' + e.name + ')';
@@ -359,10 +391,28 @@ async function iniciarManos() {
   }
   try {
     handPose = await ml5.handPose({ maxHands: 4, flipped: false, modelType: CONFIG.modeloManos });
-    detectarManosEnBucle();
+    generacionManos++;
+    ultimaDeteccion = performance.now();
+    detectarManosEnBucle(generacionManos);
   } catch (e) {
     console.warn('handPose no pudo iniciar. Se puede limpiar con el mouse.', e);
   }
+}
+
+// Si la detección de manos deja de responder (por ejemplo, porque la placa
+// de video se reinició), se vuelve a cargar el modelo sin recargar la página
+async function reiniciarManos() {
+  if (reiniciandoManos) return;
+  reiniciandoManos = true;
+  reiniciosManos++;
+  console.warn('La detección de manos dejó de responder. Reiniciando.');
+  generacionManos++;          // el bucle anterior se detiene solo
+  manos = [];
+  handPose = null;
+  await iniciarManos();
+  reiniciandoManos = false;
+  // Si no pudo volver a cargarse, lo intenta de nuevo en unos segundos
+  if (!handPose && typeof ml5 !== 'undefined') setTimeout(reiniciarManos, 5000);
 }
 
 function hayWebGL() {
@@ -375,15 +425,18 @@ function hayWebGL() {
 }
 
 // Detecta manos a un ritmo fijo y deja libre el resto del tiempo para dibujar
-async function detectarManosEnBucle() {
+async function detectarManosEnBucle(generacion) {
+  if (generacion !== generacionManos) return;   // hay un bucle más nuevo
+  let fallo = false;
   try {
-    if (videoListo()) {
+    if (videoListo() && handPose) {
       const t0 = performance.now();
       const resultado = await handPose.detect(video.elt);
+      if (generacion !== generacionManos) return;
       const t1 = performance.now();
       manosAnteriores = manos;
       tiempoManosAnteriores = tiempoManos;
-      manos = resultado;
+      manos = resultado || [];
       tiempoManos = t1;
       // Medición: cuánto tarda cada detección y cuántas hay por segundo
       msDeteccion = lerp(msDeteccion || (t1 - t0), t1 - t0, 0.1);
@@ -394,10 +447,17 @@ async function detectarManosEnBucle() {
         inicioConteo = t1;
       }
     }
+    ultimaDeteccion = performance.now();
   } catch (e) {
+    fallo = true;
     manos = [];
+    ultimoError = 'manos: ' + (e && e.message ? e.message : e);
   }
-  setTimeout(detectarManosEnBucle, CONFIG.intervaloManos);
+  if (fallo) {
+    reiniciarManos();
+    return;
+  }
+  setTimeout(() => detectarManosEnBucle(generacion), CONFIG.intervaloManos);
 }
 
 // Estima dónde está la mano ahora, a partir de cómo venía moviéndose
@@ -881,7 +941,33 @@ function actualizarPoemas(dt) {
 // ---------------------------------------------------------------------
 //  CICLO
 // ---------------------------------------------------------------------
+// Si algo falla en un cuadro, se anota y la obra sigue en el siguiente.
+// Sin esta protección, p5 detiene todo ante el primer error.
 function draw() {
+  try {
+    dibujarCuadro();
+  } catch (e) {
+    erroresDeDibujo++;
+    ultimoError = 'dibujo: ' + (e && e.message ? e.message : e);
+    console.error(e);
+    try { drawingContext.restore(); } catch (e2) {}
+  }
+  vigilar();
+}
+
+function vigilar() {
+  if (frameCount % 30 !== 0) return;
+  const ahora = performance.now();
+  // Detección de manos colgada: más de 4 segundos sin terminar ninguna
+  if (handPose && videoListo() && !reiniciandoManos && ahora - ultimaDeteccion > 4000) reiniciarManos();
+  // Cámara sin imagen: se reabre
+  if (video && video.elt && video.elt.srcObject) {
+    const pista = video.elt.srcObject.getVideoTracks()[0];
+    if (pista && pista.readyState === 'ended' && !reabriendoCamara) reabrirCamara();
+  }
+}
+
+function dibujarCuadro() {
   const dt = min(deltaTime / 1000, 0.1);
   const ahora = millis() / 1000;
 
@@ -1604,7 +1690,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   fill(255, 200, 0);
 
   fill(0, 190);
-  rect(10, 10, 620, 245);
+  rect(10, 10, 620, 283);
   fill(255);
   textSize(13);
   const lineas = [
@@ -1618,11 +1704,13 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
     `escritura desde adentro ${fantasma ? (fantasma.v.sosten < 1 ? 'escribiendo' : 'detenida') : 'en espera'}`,
     `micrófono ${analizador ? nivelCrudo.toFixed(3) : 'sin iniciar'} (umbral ${CONFIG.umbralAliento})`,
     `aliento ${nivelAliento.toFixed(2)}`,
+    `reinicios: manos ${reiniciosManos}, cámara ${reiniciosCamara}, errores de dibujo ${erroresDeDibujo}`,
+    ultimoError ? `último error: ${ultimoError.slice(0, 70)}` : '',
     avisoGrafico,
   ];
   lineas.forEach((l, k) => text(l, 20, 32 + k * 19));
 
-  const bx = 20, by = 237, bw = 310;
+  const bx = 20, by = 275, bw = 310;
   fill(60);
   rect(bx, by, bw, 8);
   fill(nivelCrudo > CONFIG.umbralAliento ? color(80, 220, 255) : color(160));
@@ -1995,8 +2083,19 @@ function keyReleased() {
   if (key.toLowerCase() === 'b') simulandoAliento = false;
 }
 
+// Al pasar a pantalla completa el navegador avisa varios cambios de tamaño
+// seguidos. Se espera a que termine y se rehace la ventana una sola vez.
 function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
-  destruirVentana();
-  construirVentana();
+  clearTimeout(esperaTamano);
+  esperaTamano = setTimeout(() => {
+    if (windowWidth === width && windowHeight === height) return;
+    try {
+      resizeCanvas(windowWidth, windowHeight);
+      destruirVentana();
+      construirVentana();
+    } catch (e) {
+      ultimoError = 'tamaño: ' + (e && e.message ? e.message : e);
+      console.error(e);
+    }
+  }, 350);
 }
