@@ -1709,7 +1709,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   fill(255, 200, 0);
 
   fill(0, 190);
-  rect(10, 10, 640, 302);
+  rect(10, 10, 640, 321);
   fill(255);
   textSize(13);
   const lineas = [
@@ -1718,6 +1718,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
     `imágenes de la cámara: ${fpsRealCamara.toFixed(1)} por segundo (pedidas ${CONFIG.fpsCamara})`,
     `cámaras conectadas: ${camarasEncontradas.join(' | ') || 'ninguna'}`,
     `detección de manos: ${estadoManos}`,
+    `muñeca de la primera mano: ${manos[0] && manos[0].keypoints ? manos[0].keypoints[0].x.toFixed(0) + ', ' + manos[0].keypoints[0].y.toFixed(0) : 'sin mano'}  (medidas del video: ${video && video.elt ? video.elt.width + 'x' + video.elt.height : '-'})`,
     `manos detectadas ${manos.length}  |  detección ${msDeteccion.toFixed(0)} ms, ${deteccionesPorSegundo.toFixed(1)} por segundo`,
     `movimiento ${movimiento.toFixed(1)} (umbral ${CONFIG.umbralMovimiento})`,
     `presencia ${hayPresencia ? 'sí' : 'no'}`,
@@ -1730,7 +1731,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   ];
   lineas.forEach((l, k) => text(l, 20, 32 + k * 19));
 
-  const bx = 20, by = 294, bw = 310;
+  const bx = 20, by = 313, bw = 310;
   fill(60);
   rect(bx, by, bw, 8);
   fill(nivelCrudo > CONFIG.umbralAliento ? color(80, 220, 255) : color(160));
