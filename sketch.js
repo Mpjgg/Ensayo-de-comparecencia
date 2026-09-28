@@ -210,6 +210,7 @@ let gotas = [];
 let mapaDesgaste, columnasDesgaste;
 const CELDA = 50;
 let depurar = false;
+let estadoManos = 'sin iniciar';
 // Vigilancia: la obra se recupera sola si algo se cae
 let ultimoError = '', erroresDeDibujo = 0;
 let generacionManos = 0, ultimaDeteccion = 0, reiniciandoManos = false, reiniciosManos = 0;
@@ -375,12 +376,14 @@ async function iniciarCamara() {
 
 async function iniciarManos() {
   if (typeof ml5 === 'undefined') {
+    estadoManos = 'ml5 no cargó (revisar internet o el index.html)';
     console.warn('ml5 no está disponible. Se puede limpiar con el mouse.');
     return;
   }
   // Sin aceleración gráfica la detección de manos congela todo: mejor no cargarla
   if (!hayWebGL()) {
     avisoGrafico = 'El navegador no tiene aceleración gráfica activada. Solo mouse.';
+    estadoManos = 'apagada: la placa de video está desactivada (ver chrome://gpu)';
     console.warn(avisoGrafico);
     return;
   }
@@ -390,11 +393,15 @@ async function iniciarManos() {
     console.warn('No se pudo elegir WebGL para ml5.', e);
   }
   try {
+    estadoManos = 'cargando el modelo…';
     handPose = await ml5.handPose({ maxHands: 4, flipped: false, modelType: CONFIG.modeloManos });
+    estadoManos = 'funcionando (ml5 ' + (ml5.version || '') + ')';
     generacionManos++;
     ultimaDeteccion = performance.now();
     detectarManosEnBucle(generacionManos);
   } catch (e) {
+    estadoManos = 'no pudo cargar el modelo: ' + (e && e.message ? e.message : e);
+    ultimoError = 'manos: ' + (e && e.message ? e.message : e);
     console.warn('handPose no pudo iniciar. Se puede limpiar con el mouse.', e);
   }
 }
@@ -1690,7 +1697,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   fill(255, 200, 0);
 
   fill(0, 190);
-  rect(10, 10, 620, 283);
+  rect(10, 10, 640, 302);
   fill(255);
   textSize(13);
   const lineas = [
@@ -1698,6 +1705,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
     `cámara ${nombreCamaraEnUso} (${videoListo() ? video.elt.videoWidth + 'x' + video.elt.videoHeight : 'sin imagen'})`,
     `imágenes de la cámara: ${fpsRealCamara.toFixed(1)} por segundo (pedidas ${CONFIG.fpsCamara})`,
     `cámaras conectadas: ${camarasEncontradas.join(' | ') || 'ninguna'}`,
+    `detección de manos: ${estadoManos}`,
     `manos detectadas ${manos.length}  |  detección ${msDeteccion.toFixed(0)} ms, ${deteccionesPorSegundo.toFixed(1)} por segundo`,
     `movimiento ${movimiento.toFixed(1)} (umbral ${CONFIG.umbralMovimiento})`,
     `presencia ${hayPresencia ? 'sí' : 'no'}`,
@@ -1710,7 +1718,7 @@ function dibujarCalibracion(manosEnPantalla, hayPresencia) {
   ];
   lineas.forEach((l, k) => text(l, 20, 32 + k * 19));
 
-  const bx = 20, by = 275, bw = 310;
+  const bx = 20, by = 294, bw = 310;
   fill(60);
   rect(bx, by, bw, 8);
   fill(nivelCrudo > CONFIG.umbralAliento ? color(80, 220, 255) : color(160));
