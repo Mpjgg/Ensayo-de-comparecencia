@@ -351,6 +351,17 @@ async function iniciarCamara() {
   elemento.playsInline = true;
   elemento.autoplay = true;
   elemento.style.display = 'none';
+  // handPose calcula las posiciones con el ancho y el alto declarados del video.
+  // Sin esto quedan en cero y todas las manos aparecen en una esquina.
+  const ajustarMedidas = () => {
+    if (elemento.videoWidth && elemento.width !== elemento.videoWidth) {
+      elemento.width = elemento.videoWidth;
+      elemento.height = elemento.videoHeight;
+    }
+  };
+  elemento.addEventListener('loadedmetadata', ajustarMedidas);
+  elemento.addEventListener('resize', ajustarMedidas);
+  elemento.ajustarMedidas = ajustarMedidas;
   document.body.appendChild(elemento);
   if (flujo) {
     elemento.srcObject = flujo;
@@ -437,6 +448,7 @@ async function detectarManosEnBucle(generacion) {
   let fallo = false;
   try {
     if (videoListo() && handPose) {
+      video.elt.ajustarMedidas && video.elt.ajustarMedidas();
       const t0 = performance.now();
       const resultado = await handPose.detect(video.elt);
       if (generacion !== generacionManos) return;
